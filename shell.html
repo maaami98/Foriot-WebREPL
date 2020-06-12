@@ -114,7 +114,9 @@
             var eShellCmdInput = null;
             var eShellContent = null;
 			var ws;
-           
+            var binary_state = 0;
+			var put_file_name = "";
+			var put_file_data = [];
 			function insertLog(log) {
                 
                 eShellContent.innerHTML += '<span class=\"shell-prompt\">' + escapeHtml(log) + '</span> ';
@@ -122,8 +124,21 @@
                 eShellContent.scrollTop = eShellContent.scrollHeight;
             }
             function _insertStdout(stdout) {
-                eShellContent.innerHTML += escapeHtml(stdout);
-                eShellContent.scrollTop = eShellContent.scrollHeight;
+				try{
+					 if (stdout.indexOf(">>> ") == 0 ){
+						
+					  eShellContent.innerHTML += '<span class=\"shell-prompt\">' + ">>>" + '</span> ';
+					  eShellCmdInput.value=stdout.substring(4);
+					  }
+					  else
+					  {
+					eShellContent.innerHTML += escapeHtml(stdout);}
+					eShellContent.scrollTop = eShellContent.scrollHeight;
+					
+					}
+				catch{}
+				return
+                
             }
 			 
 
@@ -133,31 +148,72 @@
 				element.setAttribute('multiple','multiple');
                 element.style.display = 'none';
                 document.body.appendChild(element);
-                element.addEventListener('change', function (evt) {
-                    var files = evt.target.files;
-
+				
+                element.addEventListener('change', function (callback,e) {
+                    var files = e.target.files;
 					
-					var f = files[0];
-					put_file_name = f.name;
+					put_file_name = files[0].name;
 					var reader = new FileReader();
 					reader.onload = function(e) {
 						put_file_data = new Uint8Array(e.target.result);
-						document.getElementById('put-file-list').innerHTML = '' + escape(put_file_name) + ' - ' + put_file_data.length + ' bytes';
-						document.getElementById('put-file-button').disabled = false;
+						insertLog(  escape(put_file_name) + ' - ' + put_file_data.length + ' bytes' );
+						callback(put_file_data);
 					};
-					reader.readAsArrayBuffer(f);
+					reader.readAsArrayBuffer(files[0]);
+					
+					
+					
+					
+					
+					
+					
+					
+					
                 });
                 element.click();
                 document.body.removeChild(element);
+				alert(put_file_name)
+				put_file();
             }
-		
+			
+			function put_file() {
+			var dest_fname = put_file_name;
+			var dest_fsize = put_file_data.length;
+
+			// WEBREPL_FILE = "<2sBBQLH64s"
+			var rec = new Uint8Array(2 + 1 + 1 + 8 + 4 + 2 + 64);
+			rec[0] = 'W'.charCodeAt(0);
+			rec[1] = 'A'.charCodeAt(0);
+			rec[2] = 1; // put
+			rec[3] = 0;
+			rec[4] = 0; rec[5] = 0; rec[6] = 0; rec[7] = 0; rec[8] = 0; rec[9] = 0; rec[10] = 0; rec[11] = 0;
+			rec[12] = dest_fsize & 0xff; rec[13] = (dest_fsize >> 8) & 0xff; rec[14] = (dest_fsize >> 16) & 0xff; rec[15] = (dest_fsize >> 24) & 0xff;
+			rec[16] = dest_fname.length & 0xff; rec[17] = (dest_fname.length >> 8) & 0xff;
+			for (var i = 0; i < 64; ++i) {
+				if (i < dest_fname.length) {
+					rec[18 + i] = dest_fname.charCodeAt(i);
+				} else {
+					rec[18 + i] = 0;
+				}
+			}
+
+			// initiate put
+			binary_state = 11;
+			insertLog('Sending ' + put_file_name + '...');
+			ws.send(rec);
+		}
+			function _insertCommand(command) {
+                eShellContent.innerHTML += escapeHtml(command);
+                eShellContent.innerHTML += "\n";
+                eShellContent.scrollTop = eShellContent.scrollHeight;
+            }
             function featureShell(command) {
 				
                 
 			
                 if (/^\s*upload\s*$/.test(command)) {
                     featureUpload();
-				} else if (/^\s*download\s+[^\s]+\s*$/.test(command)) {
+				} else if (/^\s*download\s + [^\s] + \s*$/.test(command)) {
 					get_file(command.match(/^\s*download\s+([^\s]+)\s*$/)[1]);
 				
                 } else if (/^\s*clear\s*$/.test(command)) {
@@ -183,8 +239,13 @@
 				} else if(/^\s*ls\s*$/.test(command.split(' ')[0]) )
 				{
 					ws.send("import os;os.listdir();\r");
-				}
-				else {
+				} else if(/^\s*rm\s+[^\s]+\s*$/.test(command) )
+				{
+					ws.send("import os;os.remove('"+  command.match(/^\s*rm\s+([^\s]+)\s*$/)[1] +"');\r");
+				} else if(/^\s*cat\s+[^\s]+\s*$/.test(command) )
+				{
+					ws.send("print(open('"+  command.match(/^\s*cat\s+([^\s]+)\s*$/)[1] +"').read());\r");
+				} else {
 					data = command+"\n";
 					console.log("giden data:"+data)
 					try {
@@ -213,9 +274,9 @@
 				ws.onopen = function() {
 					insertLog("Connected.")
 					
-					ws.onmessage = function(event) {
-						if (event.data instanceof ArrayBuffer) {
-							var data = new Uint8Array(event.data);
+					ws.onmessage = function(e) {
+						if (e.data instanceof ArrayBuffer) {
+							var data = new Uint8Array(e.data);
 							switch (binary_state) {
 								case 11:
 									// first response for put
@@ -288,7 +349,7 @@
 									break;
 							}
 						}
-						_insertStdout(event.data);
+						_insertStdout(e.data);
 					};
 				};
 
@@ -306,12 +367,12 @@
             }
 
             
-            function _onShellCmdKeyDown(event) {
-                switch (event.key) {
+            function _onShellCmdKeyDown(e) {
+                switch (e.key) {
                     case "Enter":
                         featureShell(eShellCmdInput.value);
                         insertToHistory(eShellCmdInput.value);
-                        eShellCmdInput.value = "";
+                        eShellCmdInput.value="";
                         break;
                     case "ArrowUp":
                         if (historyPosition > 0) {
@@ -336,14 +397,22 @@
                         break;
                     case 'Tab':
                         event.preventDefault();
-						
-						
 						var data=eShellCmdInput.value+"\x09";
                         ws.send(data);
-						ws.send("\x03"); //send interupt
+						
+						//ws.send("\x03"); //send interupt
                         break;
+					
                 }
-            }
+				
+				var key = e.which || e.keyCode; // keyCode detection
+				var ctrl = e.ctrlKey ? e.ctrlKey : ((key === 17) ? true : false); // ctrl detection
+
+				if ( key == 67 && ctrl ) {
+					ws.send("\x03");
+					console.log("Keyboard Interupt");
+				} 
+						}
 
             function insertToHistory(cmd) {
                 commandHistory.push(cmd);
@@ -377,69 +446,18 @@
 				ws.send(rec);
 			}
 
-			function get_ver() {
-			// WEBREPL_REQ_S = "<2sBBQLH64s"
-			var rec = new Uint8Array(2 + 1 + 1 + 8 + 4 + 2 + 64);
-			rec[0] = 'W'.charCodeAt(0);
-			rec[1] = 'A'.charCodeAt(0);
-			rec[2] = 3; // GET_VER
-			// rest of "rec" is zero
-
-			// initiate GET_VER
-			binary_state = 31;
-			ws.send(rec);
-			}
-			function put_file() {
-			var dest_fname = put_file_name;
-			var dest_fsize = put_file_data.length;
-
-			// WEBREPL_FILE = "<2sBBQLH64s"
-			var rec = new Uint8Array(2 + 1 + 1 + 8 + 4 + 2 + 64);
-			rec[0] = 'W'.charCodeAt(0);
-			rec[1] = 'A'.charCodeAt(0);
-			rec[2] = 1; // put
-			rec[3] = 0;
-			rec[4] = 0; rec[5] = 0; rec[6] = 0; rec[7] = 0; rec[8] = 0; rec[9] = 0; rec[10] = 0; rec[11] = 0;
-			rec[12] = dest_fsize & 0xff; rec[13] = (dest_fsize >> 8) & 0xff; rec[14] = (dest_fsize >> 16) & 0xff; rec[15] = (dest_fsize >> 24) & 0xff;
-			rec[16] = dest_fname.length & 0xff; rec[17] = (dest_fname.length >> 8) & 0xff;
-			for (var i = 0; i < 64; ++i) {
-				if (i < dest_fname.length) {
-					rec[18 + i] = dest_fname.charCodeAt(i);
-				} else {
-					rec[18 + i] = 0;
-				}
-			}
-
-			// initiate put
-			binary_state = 11;
-			insertLog('Sending ' + put_file_name + '...');
-			ws.send(rec);
-		}
-					function handle_put_file_select(evt) {
-						// The event holds a FileList object which is a list of File objects,
-						// but we only support single file selection at the moment.
-						var files = evt.target.files;
-
-						// Get the file info and load its data.
-						var f = files[0];
-						put_file_name = f.name;
-						var reader = new FileReader();
-						reader.onload = function(e) {
-							put_file_data = new Uint8Array(e.target.result);
-							document.getElementById('put-file-list').innerHTML = '' + escape(put_file_name) + ' - ' + put_file_data.length + ' bytes';
-							document.getElementById('put-file-button').disabled = false;
-						};
-						reader.readAsArrayBuffer(f);
-					}
+					
+				
+		
 
 					
-					window.onload = function() {
-						eShellCmdInput = document.getElementById("shell-cmd");
-						eShellContent = document.getElementById("shell-content");
-						eShellCmdInput.focus();
-						insertLog(" 'help' for commands");
-						
-					};
+			window.onload = function() {
+				eShellCmdInput = document.getElementById("shell-cmd");
+				eShellContent = document.getElementById("shell-content");
+				eShellCmdInput.focus();
+				insertLog(" 'help' for commands");
+				
+			};
 				</script>
     </head>
 
